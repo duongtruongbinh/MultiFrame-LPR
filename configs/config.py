@@ -9,8 +9,8 @@ class Config:
     """Training configuration with all hyperparameters."""
     
     # Experiment tracking
-    EXPERIMENT_NAME: str = "baseline"
-    MODEL_TYPE: str = "restran"  # "crnn" or "restran"
+    MODEL_TYPE: str = "crnn"  # "crnn" or "restran"
+    EXPERIMENT_NAME: str = MODEL_TYPE
     
     # Data paths
     DATA_ROOT: str = "data/train"
@@ -26,13 +26,15 @@ class Config:
     
     # Training hyperparameters
     BATCH_SIZE: int = 64
-    LEARNING_RATE: float = 0.0001
-    EPOCHS: int = 15
+    LEARNING_RATE: float = 0.001
+    EPOCHS: int = 30
     SEED: int = 42
-    NUM_WORKERS: int = 15
+    NUM_WORKERS: int = 10
     WEIGHT_DECAY: float = 1e-4
     GRAD_CLIP: float = 5.0
     SPLIT_RATIO: float = 0.9
+    PATIENCE: int = 10
+    USE_CUDNN_BENCHMARK: bool = True
     
     # CRNN model hyperparameters
     HIDDEN_SIZE: int = 256

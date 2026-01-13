@@ -1,7 +1,8 @@
 """Post-processing utilities for OCR decoding."""
 from typing import Dict, List, Tuple
-
 import torch
+import numpy as np
+
 
 
 def decode_with_confidence(
@@ -18,23 +19,33 @@ def decode_with_confidence(
         List of (predicted_string, confidence_score) tuples.
     """
     probs = preds.exp()
-    max_probs, indices = probs.max(dim=2)
+    max_probs, indices = probs.max(dim=2)    
+    indices_np = indices.detach().cpu().numpy()
+    max_probs_np = max_probs.detach().cpu().numpy()
+    
     result_list: List[Tuple[str, float]] = []
     
-    for b in range(preds.size(0)):
-        pred_str = ""
-        confidences: List[float] = []
-        last_char = 0
+    batch_size, time_steps = indices_np.shape
+    
+    for b in range(batch_size):
+        path = indices_np[b]
+        probs_b = max_probs_np[b]
         
-        for t in range(preds.size(1)):
-            c = indices[b, t].item()
-            p = max_probs[b, t].item()
-            if c != 0 and c != last_char:
-                pred_str += idx2char.get(c, '')
-                confidences.append(p)
-            last_char = c
+        pred_chars = []
+        confidences = []
+        last_char = 0 
         
-        score = sum(confidences) / len(confidences) if confidences else 0.0
+        for t in range(time_steps):
+            c = path[t]
+            if c != last_char: 
+                if c != 0:      
+                    pred_chars.append(idx2char.get(c, ''))
+                    confidences.append(probs_b[t])
+                last_char = c
+        
+        pred_str = "".join(pred_chars)
+
+        score = float(np.mean(confidences)) if confidences else 0.0
         result_list.append((pred_str, score))
     
     return result_list

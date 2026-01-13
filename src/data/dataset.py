@@ -159,17 +159,16 @@ class MultiFrameDataset(Dataset):
                     glob.glob(os.path.join(track_path, "hr-*.jpg"))
                 )
                 
-                # Sample 1: Real LR
-                if len(lr_files) > 0:
-                    self.samples.append({
-                        'paths': lr_files,
-                        'label': label,
-                        'is_synthetic': False,
-                        'track_id': track_id
-                    })
+                # Sample 1: Real LR (guaranteed 5 frames)
+                self.samples.append({
+                    'paths': lr_files,
+                    'label': label,
+                    'is_synthetic': False,
+                    'track_id': track_id
+                })
                 
-                # Sample 2: Synthetic LR (only in train mode and if HR exists)
-                if self.mode == 'train' and len(hr_files) > 0:
+                # Sample 2: Synthetic LR (only in train mode, guaranteed 5 frames)
+                if self.mode == 'train':
                     self.samples.append({
                         'paths': hr_files,
                         'label': label,
@@ -183,34 +182,23 @@ class MultiFrameDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int, str, str]:
+        """Load exactly 5 frames (guaranteed by dataset structure)."""
         item = self.samples[idx]
         img_paths = item['paths']
         label = item['label']
         is_synthetic = item['is_synthetic']
         track_id = item['track_id']
         
-        # Pad or truncate to exactly 5 frames
-        if len(img_paths) < 5:
-            img_paths = img_paths + [img_paths[-1]] * (5 - len(img_paths))
-        else:
-            img_paths = img_paths[:5]
-            
         images_list = []
         for p in img_paths:
-            try:
-                image = cv2.imread(p)
-                if image is None:
-                    image = np.zeros((self.img_height, self.img_width, 3), dtype=np.uint8)
-                else:
-                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                
-                if is_synthetic and self.degrade:
-                    image = self.degrade(image=image)['image']
-                
-                image = self.transform(image=image)['image']
-                images_list.append(image)
-            except Exception:
-                images_list.append(torch.zeros(3, self.img_height, self.img_width))
+            image = cv2.imread(p, cv2.IMREAD_COLOR)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            if is_synthetic and self.degrade:
+                image = self.degrade(image=image)['image']
+            
+            image = self.transform(image=image)['image']
+            images_list.append(image)
 
         images_tensor = torch.stack(images_list, dim=0)
         target = [self.char2idx[c] for c in label if c in self.char2idx]

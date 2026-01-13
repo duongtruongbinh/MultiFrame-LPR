@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.utils.postprocess import decode_with_confidence
+from src.utils.common import seed_everything
 
 
 class Trainer:
@@ -36,6 +37,7 @@ class Trainer:
         self.config = config
         self.idx2char = idx2char
         self.device = config.DEVICE
+        seed_everything(config.SEED, benchmark=config.USE_CUDNN_BENCHMARK)
         
         # Loss and optimizer
         self.criterion = nn.CTCLoss(blank=0, zero_infinity=True)
@@ -55,6 +57,7 @@ class Trainer:
         # Tracking
         self.best_acc = 0.0
         self.current_epoch = 0
+        self.patience_counter = 0
 
     def train_one_epoch(self) -> float:
         """Train for one epoch."""
@@ -103,15 +106,22 @@ class Trainer:
         
         return epoch_loss / len(self.train_loader)
 
-    def validate(self) -> Tuple[float, float, List[str]]:
-        """Run validation and generate submission data."""
+    def validate(self) -> Tuple[Dict[str, float], List[str]]:
+        """Run validation and generate submission data.
+        
+        Returns:
+            Tuple of (metrics_dict, submission_data).
+            metrics_dict contains 'loss', 'acc', and 'cer'.
+        """
         if self.val_loader is None:
-            return 0.0, 0.0, []
+            return {'loss': 0.0, 'acc': 0.0, 'cer': 0.0}, []
         
         self.model.eval()
         val_loss = 0.0
         total_correct = 0
         total_samples = 0
+        all_preds: List[str] = []
+        all_targets: List[str] = []
         submission_data: List[str] = []
         
         with torch.no_grad():
@@ -137,6 +147,10 @@ class Trainer:
                 for i, (pred_text, conf) in enumerate(decoded_list):
                     gt_text = labels_text[i]
                     track_id = track_ids[i]
+                    
+                    all_preds.append(pred_text)
+                    all_targets.append(gt_text)
+                    
                     if pred_text == gt_text:
                         total_correct += 1
                     submission_data.append(f"{track_id},{pred_text};{conf:.4f}")
@@ -146,7 +160,12 @@ class Trainer:
         avg_val_loss = val_loss / len(self.val_loader)
         val_acc = (total_correct / total_samples) * 100 if total_samples > 0 else 0.0
         
-        return avg_val_loss, val_acc, submission_data
+        metrics = {
+            'loss': avg_val_loss,
+            'acc': val_acc,
+        }
+        
+        return metrics, submission_data
 
     def save_submission(self, submission_data: List[str]) -> None:
         """Save submission file with experiment name."""
@@ -164,8 +183,9 @@ class Trainer:
         torch.save(self.model.state_dict(), path)
 
     def fit(self) -> None:
-        """Run the full training loop."""
+        """Run the full training loop with Early Stopping."""
         print(f"🚀 TRAINING START | Device: {self.device}")
+        print(f"📊 Early Stopping: Patience={self.config.PATIENCE} epochs (monitoring Val Acc)")
         
         for epoch in range(self.config.EPOCHS):
             self.current_epoch = epoch
@@ -174,19 +194,35 @@ class Trainer:
             avg_train_loss = self.train_one_epoch()
             
             # Validation
-            avg_val_loss, val_acc, submission_data = self.validate()
+            val_metrics, submission_data = self.validate()
+            val_loss = val_metrics['loss']
+            val_acc = val_metrics['acc']
+            current_lr = self.scheduler.get_last_lr()[0]
             
-            print(f"Result: Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+            # Log results
+            print(f"Result: Train Loss: {avg_train_loss:.4f} | "
+                  f"Val Loss: {val_loss:.4f} | "
+                  f"Val Acc: {val_acc:.2f}% | "
+                  f"LR: {current_lr:.2e}")
             
-            # Save best model
+            # Check for improvement
             if val_acc > self.best_acc:
                 self.best_acc = val_acc
+                self.patience_counter = 0
                 self.save_model()
                 exp_name = getattr(self.config, 'EXPERIMENT_NAME', 'baseline')
                 print(f" -> ⭐ Saved Best Model: {exp_name}_best.pth ({val_acc:.2f}%)")
                 
                 if submission_data:
                     self.save_submission(submission_data)
+            else:
+                self.patience_counter += 1
+                print(f" -> No improvement. Patience: {self.patience_counter}/{self.config.PATIENCE}")
+                
+                if self.patience_counter >= self.config.PATIENCE:
+                    print(f"\n⏹️  Early Stopping triggered! No improvement for {self.config.PATIENCE} epochs.")
+                    print(f"✅ Best Val Acc: {self.best_acc:.2f}%")
+                    break
 
     def predict(self, loader: DataLoader) -> List[Tuple[str, str, float]]:
         """Run inference on a data loader.

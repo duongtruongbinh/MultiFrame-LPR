@@ -114,7 +114,6 @@ def main():
     if args.transformer_layers is not None:
         config.TRANSFORMER_LAYERS = args.transformer_layers
     
-    # Set random seeds
     seed_everything(config.SEED)
     
     print(f"🚀 Configuration:")
