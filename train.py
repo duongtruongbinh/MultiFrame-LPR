@@ -72,6 +72,24 @@ def parse_args() -> argparse.Namespace:
         "--transformer-layers", type=int, default=None,
         help="Number of transformer encoder layers (default: from config)"
     )
+    parser.add_argument(
+        "--no-stn",
+        action="store_true",
+        help="Disable STN module in ResTranOCR (overrides config.USE_STN=True)",
+    )
+    parser.add_argument(
+        "--aug-level",
+        type=str,
+        choices=["full", "light"],
+        default=None,
+        help="Augmentation level for training data (default: from config)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="results",
+        help="Directory to save checkpoints and submission files (default: results/)",
+    )
     return parser.parse_args()
 
 
@@ -82,37 +100,36 @@ def main():
     # Initialize config with CLI overrides
     config = Config()
     
-    # Experiment tracking
-    if args.experiment_name is not None:
-        config.EXPERIMENT_NAME = args.experiment_name
-    if args.model is not None:
-        config.MODEL_TYPE = args.model
+    # Map CLI arguments to config attributes
+    arg_to_config = {
+        'experiment_name': 'EXPERIMENT_NAME',
+        'model': 'MODEL_TYPE',
+        'epochs': 'EPOCHS',
+        'batch_size': 'BATCH_SIZE',
+        'learning_rate': 'LEARNING_RATE',
+        'data_root': 'DATA_ROOT',
+        'seed': 'SEED',
+        'num_workers': 'NUM_WORKERS',
+        'hidden_size': 'HIDDEN_SIZE',
+        'resnet_layers': 'RESNET_LAYERS',
+        'transformer_heads': 'TRANSFORMER_HEADS',
+        'transformer_layers': 'TRANSFORMER_LAYERS',
+    }
     
-    # Training hyperparameters
-    if args.epochs is not None:
-        config.EPOCHS = args.epochs
-    if args.batch_size is not None:
-        config.BATCH_SIZE = args.batch_size
-    if args.learning_rate is not None:
-        config.LEARNING_RATE = args.learning_rate
-    if args.data_root is not None:
-        config.DATA_ROOT = args.data_root
-    if args.seed is not None:
-        config.SEED = args.seed
-    if args.num_workers is not None:
-        config.NUM_WORKERS = args.num_workers
+    for arg_name, config_name in arg_to_config.items():
+        value = getattr(args, arg_name, None)
+        if value is not None:
+            setattr(config, config_name, value)
     
-    # CRNN hyperparameters
-    if args.hidden_size is not None:
-        config.HIDDEN_SIZE = args.hidden_size
+    # Special cases
+    if args.no_stn:
+        config.USE_STN = False
+    if args.aug_level is not None:
+        config.AUGMENTATION_LEVEL = args.aug_level
     
-    # ResTranOCR hyperparameters
-    if args.resnet_layers is not None:
-        config.RESNET_LAYERS = args.resnet_layers
-    if args.transformer_heads is not None:
-        config.TRANSFORMER_HEADS = args.transformer_heads
-    if args.transformer_layers is not None:
-        config.TRANSFORMER_LAYERS = args.transformer_layers
+    # Output directory
+    config.OUTPUT_DIR = args.output_dir
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     
     seed_everything(config.SEED)
     
@@ -139,7 +156,8 @@ def main():
         img_width=config.IMG_WIDTH,
         char2idx=config.CHAR2IDX,
         val_split_file=config.VAL_SPLIT_FILE,
-        seed=config.SEED
+        seed=config.SEED,
+        augmentation_level=config.AUGMENTATION_LEVEL,
     )
     
     val_ds = MultiFrameDataset(
@@ -150,7 +168,8 @@ def main():
         img_width=config.IMG_WIDTH,
         char2idx=config.CHAR2IDX,
         val_split_file=config.VAL_SPLIT_FILE,
-        seed=config.SEED
+        seed=config.SEED,
+        augmentation_level=config.AUGMENTATION_LEVEL,
     )
     
     if len(train_ds) == 0:
@@ -188,7 +207,8 @@ def main():
             transformer_heads=config.TRANSFORMER_HEADS,
             transformer_layers=config.TRANSFORMER_LAYERS,
             transformer_ff_dim=config.TRANSFORMER_FF_DIM,
-            dropout=config.TRANSFORMER_DROPOUT
+            dropout=config.TRANSFORMER_DROPOUT,
+            use_stn=config.USE_STN,
         ).to(config.DEVICE)
     else:
         model = MultiFrameCRNN(

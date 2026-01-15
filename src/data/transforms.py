@@ -21,16 +21,26 @@ def get_train_transforms(img_height: int = 32, img_width: int = 128) -> A.Compos
             sat_shift_limit=20,
             val_shift_limit=20,
             p=0.3
-        ),A.Rotate(limit=10, p=0.3), 
+        ),
+        A.Rotate(limit=10, p=0.3), 
         A.ChannelShuffle(p=0.3),
         A.CoarseDropout(
-            num_holes_range=(1, 3),
+            num_holes_range=(2, 5),
             hole_height_range=(4, 8),
             hole_width_range=(4, 8),
             p=0.3
         ),
         A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
         ToTensorV2()
+    ])
+
+
+def get_light_transforms(img_height: int = 32, img_width: int = 128) -> A.Compose:
+    """Light training pipeline: resize + normalize only."""
+    return A.Compose([
+        A.Resize(height=img_height, width=img_width),
+        A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+        ToTensorV2(),
     ])
 
 

@@ -23,6 +23,7 @@ best_model.pth
 submission_*.txt
 outputs/
 logs/
+*.log
 
 # IDE & OS
 .vscode/

@@ -1,10 +1,9 @@
 """Post-processing utilities for OCR decoding."""
 from typing import Dict, List, Tuple
-import torch
-import numpy as np
 from collections import defaultdict
 
-
+import numpy as np
+import torch
 
 def decode_with_confidence(
     preds: torch.Tensor,

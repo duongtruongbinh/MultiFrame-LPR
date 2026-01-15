@@ -9,8 +9,11 @@ class Config:
     """Training configuration with all hyperparameters."""
     
     # Experiment tracking
-    MODEL_TYPE: str = "restran18"  # "crnn" or "restran"
-    EXPERIMENT_NAME: str = "restran"
+    MODEL_TYPE: str = "restran"  # "crnn" or "restran"
+    EXPERIMENT_NAME: str = "restran18"
+    USE_STN: bool = True
+    AUGMENTATION_LEVEL: str = "full"  # "full" or "light"
+    TEST_BEAM_SEARCH: bool = False
     
     # Data paths
     DATA_ROOT: str = "data/train"
@@ -47,8 +50,8 @@ class Config:
     TRANSFORMER_FF_DIM: int = 2048
     TRANSFORMER_DROPOUT: float = 0.1
     
-    # Device
     DEVICE: torch.device = field(default_factory=lambda: torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+    OUTPUT_DIR: str = "results"
     
     # Derived attributes (computed in __post_init__)
     CHAR2IDX: Dict[str, int] = field(default_factory=dict, init=False)

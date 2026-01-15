@@ -11,7 +11,12 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from src.data.transforms import get_train_transforms, get_val_transforms, get_degradation_transforms
+from src.data.transforms import (
+    get_train_transforms,
+    get_val_transforms,
+    get_degradation_transforms,
+    get_light_transforms,
+)
 
 
 class MultiFrameDataset(Dataset):
@@ -30,7 +35,8 @@ class MultiFrameDataset(Dataset):
         img_width: int = 128,
         char2idx: Dict[str, int] = None,
         val_split_file: str = "data/val_tracks.json",
-        seed: int = 42
+        seed: int = 42,
+        augmentation_level: str = "full",
     ):
         """
         Args:
@@ -42,6 +48,7 @@ class MultiFrameDataset(Dataset):
             char2idx: Character to index mapping.
             val_split_file: Path to validation split JSON file.
             seed: Random seed for reproducible splitting.
+            augmentation_level: 'full' or 'light' augmentation for training.
         """
         self.mode = mode
         self.samples: List[Dict[str, Any]] = []
@@ -50,9 +57,13 @@ class MultiFrameDataset(Dataset):
         self.char2idx = char2idx or {}
         self.val_split_file = val_split_file
         self.seed = seed
+        self.augmentation_level = augmentation_level
         
         if mode == 'train':
-            self.transform = get_train_transforms(img_height, img_width)
+            if augmentation_level == "light":
+                self.transform = get_light_transforms(img_height, img_width)
+            else:
+                self.transform = get_train_transforms(img_height, img_width)
             self.degrade = get_degradation_transforms()
         else:
             self.transform = get_val_transforms(img_height, img_width)

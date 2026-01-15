@@ -1,4 +1,5 @@
 """Trainer class encapsulating the training and validation loop."""
+import os
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -60,6 +61,16 @@ class Trainer:
         self.best_acc = 0.0
         self.current_epoch = 0
         self.patience_counter = 0
+    
+    def _get_output_path(self, filename: str) -> str:
+        """Get full path for output file in configured directory."""
+        output_dir = getattr(self.config, 'OUTPUT_DIR', 'results')
+        os.makedirs(output_dir, exist_ok=True)
+        return os.path.join(output_dir, filename)
+    
+    def _get_exp_name(self) -> str:
+        """Get experiment name from config."""
+        return getattr(self.config, 'EXPERIMENT_NAME', 'baseline')
 
     def train_one_epoch(self) -> float:
         """Train for one epoch."""
@@ -113,18 +124,20 @@ class Trainer:
         
         Returns:
             Tuple of (metrics_dict, submission_data).
-            metrics_dict contains 'loss', 'acc', and 'cer'.
+            metrics_dict contains at least 'loss' and 'acc'.
         """
         if self.val_loader is None:
             return {'loss': 0.0, 'acc': 0.0, 'cer': 0.0}, []
         
         self.model.eval()
         val_loss = 0.0
-        total_correct = 0
+        total_correct_greedy = 0
+        total_correct_beam = 0
         total_samples = 0
         all_preds: List[str] = []
         all_targets: List[str] = []
         submission_data: List[str] = []
+        compute_beam = getattr(self.config, "TEST_BEAM_SEARCH", False)
         
         with torch.no_grad():
             for images, targets, target_lengths, labels_text, track_ids in self.val_loader:
@@ -144,9 +157,13 @@ class Trainer:
                     target_lengths
                 )
                 val_loss += loss.item()
-                
-                decoded_list = decode_with_confidence(preds, self.idx2char)
-                for i, (pred_text, conf) in enumerate(decoded_list):
+
+                # Greedy decoding
+                decoded_greedy = decode_with_confidence(preds, self.idx2char)
+                # Optional beam-search decoding
+                decoded_beam = decode_beam_search(preds, self.idx2char) if compute_beam else None
+
+                for i, (pred_text, conf) in enumerate(decoded_greedy):
                     gt_text = labels_text[i]
                     track_id = track_ids[i]
                     
@@ -154,25 +171,34 @@ class Trainer:
                     all_targets.append(gt_text)
                     
                     if pred_text == gt_text:
-                        total_correct += 1
+                        total_correct_greedy += 1
                     submission_data.append(f"{track_id},{pred_text};{conf:.4f}")
+
+                    if compute_beam and decoded_beam is not None:
+                        beam_text, _ = decoded_beam[i]
+                        if beam_text == gt_text:
+                            total_correct_beam += 1
                     
                 total_samples += len(labels_text)
 
         avg_val_loss = val_loss / len(self.val_loader)
-        val_acc = (total_correct / total_samples) * 100 if total_samples > 0 else 0.0
+        val_acc = (total_correct_greedy / total_samples) * 100 if total_samples > 0 else 0.0
+        beam_acc = (total_correct_beam / total_samples) * 100 if (total_samples > 0 and compute_beam) else None
         
         metrics = {
             'loss': avg_val_loss,
             'acc': val_acc,
         }
+        if beam_acc is not None:
+            metrics['beam_acc'] = beam_acc
+            print(f"[VAL] Greedy Acc: {val_acc:.2f}% | Beam Acc: {beam_acc:.2f}%")
         
         return metrics, submission_data
 
     def save_submission(self, submission_data: List[str]) -> None:
         """Save submission file with experiment name."""
-        exp_name = getattr(self.config, 'EXPERIMENT_NAME', 'baseline')
-        filename = f"submission_{exp_name}.txt"
+        exp_name = self._get_exp_name()
+        filename = self._get_output_path(f"submission_{exp_name}.txt")
         with open(filename, 'w') as f:
             f.write("\n".join(submission_data))
         print(f"📝 Saved {len(submission_data)} lines to {filename}")
@@ -180,8 +206,8 @@ class Trainer:
     def save_model(self, path: str = None) -> None:
         """Save model checkpoint with experiment name."""
         if path is None:
-            exp_name = getattr(self.config, 'EXPERIMENT_NAME', 'baseline')
-            path = f"{exp_name}_best.pth"
+            exp_name = self._get_exp_name()
+            path = self._get_output_path(f"{exp_name}_best.pth")
         torch.save(self.model.state_dict(), path)
 
     def fit(self) -> None:
@@ -212,8 +238,9 @@ class Trainer:
                 self.best_acc = val_acc
                 self.patience_counter = 0
                 self.save_model()
-                exp_name = getattr(self.config, 'EXPERIMENT_NAME', 'baseline')
-                print(f" -> ⭐ Saved Best Model: {exp_name}_best.pth ({val_acc:.2f}%)")
+                exp_name = self._get_exp_name()
+                model_path = self._get_output_path(f"{exp_name}_best.pth")
+                print(f" -> ⭐ Saved Best Model: {model_path} ({val_acc:.2f}%)")
                 
                 if submission_data:
                     self.save_submission(submission_data)

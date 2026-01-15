@@ -1,0 +1,8 @@
+=== Ablation Summary ===
+Experiment           | Best Acc (%)
+-----------------------------------
+restran_base         | 76.10       
+restran_no_stn       | 75.15       
+restran_r34          | 77.35       
+restran_light_aug    | 74.00       
+crnn_base            | 74.25       

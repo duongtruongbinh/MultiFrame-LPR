@@ -24,7 +24,8 @@ class ResTranOCR(nn.Module):
         transformer_heads: int = 8,
         transformer_layers: int = 3,
         transformer_ff_dim: int = 2048,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        use_stn: bool = True,
     ):
         """
         Args:
@@ -34,13 +35,16 @@ class ResTranOCR(nn.Module):
             transformer_layers: Number of transformer encoder layers.
             transformer_ff_dim: Feedforward dimension in transformer.
             dropout: Dropout rate.
+            use_stn: Whether to enable the input STN alignment block.
         """
         super().__init__()
         self.cnn_channels = 512  # ResNet output channels
+        self.use_stn = use_stn
         
         # STN: Spatial Transformer Network for INPUT ALIGNMENT
-        # Operates on RGB images (3 channels)
-        self.stn = STNBlock(in_channels=3)
+        # Only initialize if enabled to save memory
+        if use_stn:
+            self.stn = STNBlock(in_channels=3)
         
         # Backbone: ResNet feature extractor
         self.backbone = ResNetFeatureExtractor(layers=resnet_layers)
@@ -74,26 +78,21 @@ class ResTranOCR(nn.Module):
         """
         b, t, c, h, w = x.size()
         
-        # --- Shared STN Logic ---
-        # 1. Compute temporal mean of frames to find the "average" pose
-        # Shape: [B, 3, H, W]
-        x_mean = torch.mean(x, dim=1)
-        
-        # 2. Predict affine transformation parameters based on mean image
-        xs = self.stn.localization(x_mean)
-        theta = self.stn.fc_loc(xs)
-        theta = theta.view(-1, 2, 3)
-        
-        # 3. Apply the SAME transformation to ALL frames
-        # Reshape x to [B*T, 3, H, W]
+        # Reshape frames to batch-first for backbone input
         x_flat = x.view(b * t, c, h, w)
-        
-        # Repeat theta for each frame: [B, 2, 3] -> [B, T, 2, 3] -> [B*T, 2, 3]
-        theta_repeated = theta.unsqueeze(1).repeat(1, t, 1, 1).view(b * t, 2, 3)
-        
-        # Generate grid and warp
-        grid = torch.nn.functional.affine_grid(theta_repeated, x_flat.size(), align_corners=False)
-        aligned_images = torch.nn.functional.grid_sample(x_flat, grid, align_corners=False)
+
+        if self.use_stn:
+            # Shared STN: compute mean frame, predict transformation, apply to all frames
+            x_mean = torch.mean(x, dim=1)  # [B, 3, H, W]
+            xs = self.stn.localization(x_mean)
+            theta = self.stn.fc_loc(xs).view(-1, 2, 3)  # [B, 2, 3]
+            
+            # Apply same transformation to all frames
+            theta_repeated = theta.unsqueeze(1).repeat(1, t, 1, 1).view(b * t, 2, 3)
+            grid = torch.nn.functional.affine_grid(theta_repeated, x_flat.size(), align_corners=False)
+            aligned_images = torch.nn.functional.grid_sample(x_flat, grid, align_corners=False)
+        else:
+            aligned_images = x_flat
         
         # --- Backbone ---
         feat = self.backbone(aligned_images)  # [B*T, 512, 1, W']
