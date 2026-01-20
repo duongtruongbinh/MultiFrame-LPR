@@ -16,6 +16,7 @@ class Config:
     
     # Data paths
     DATA_ROOT: str = "data/train"
+    TEST_DATA_ROOT: str = "data/public_test"
     VAL_SPLIT_FILE: str = "data/val_tracks.json"
     SUBMISSION_FILE: str = "submission.txt"
     

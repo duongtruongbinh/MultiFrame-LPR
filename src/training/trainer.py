@@ -228,6 +228,13 @@ class Trainer:
                 if submission_data:
                     self.save_submission(submission_data)
         
+        # Save final model if no validation was performed (submission mode)
+        if self.val_loader is None:
+            self.save_model()
+            exp_name = self._get_exp_name()
+            model_path = self._get_output_path(f"{exp_name}_best.pth")
+            print(f"  💾 Saved final model: {model_path}")
+        
         print(f"\n✅ Training complete! Best Val Acc: {self.best_acc:.2f}%")
 
     def predict(self, loader: DataLoader) -> List[Tuple[str, str, float]]:
@@ -249,3 +256,32 @@ class Trainer:
                     results.append((track_ids[i], pred_text, conf))
         
         return results
+
+    def predict_test(self, test_loader: DataLoader, output_filename: str = "submission_final.txt") -> None:
+        """Run inference on test data and save submission file.
+        
+        Args:
+            test_loader: DataLoader for test data.
+            output_filename: Name of the submission file to save.
+        """
+        print(f"🔮 Running inference on test data...")
+        
+        # Use existing predict method
+        results = []
+        self.model.eval()
+        with torch.no_grad():
+            for images, _, _, _, track_ids in tqdm(test_loader, desc="Test Inference"):
+                images = images.to(self.device)
+                preds = self.model(images)
+                decoded_list = decode_with_confidence(preds, self.idx2char)
+                
+                for i, (pred_text, conf) in enumerate(decoded_list):
+                    results.append((track_ids[i], pred_text, conf))
+        
+        # Format and save submission file
+        submission_data = [f"{track_id},{pred_text};{conf:.4f}" for track_id, pred_text, conf in results]
+        output_path = self._get_output_path(output_filename)
+        with open(output_path, 'w') as f:
+            f.write("\n".join(submission_data))
+        
+        print(f"✅ Saved {len(submission_data)} predictions to {output_path}")

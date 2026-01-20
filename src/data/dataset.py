@@ -6,7 +6,6 @@ import random
 from typing import Any, Dict, List, Tuple
 
 import cv2
-import numpy as np
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
@@ -37,6 +36,8 @@ class MultiFrameDataset(Dataset):
         val_split_file: str = "data/val_tracks.json",
         seed: int = 42,
         augmentation_level: str = "full",
+        is_test: bool = False,
+        full_train: bool = False,
     ):
         """
         Args:
@@ -49,6 +50,8 @@ class MultiFrameDataset(Dataset):
             val_split_file: Path to validation split JSON file.
             seed: Random seed for reproducible splitting.
             augmentation_level: 'full' or 'light' augmentation for training.
+            is_test: If True, load test data without labels (for submission).
+            full_train: If True, use all tracks for training (no val split).
         """
         self.mode = mode
         self.samples: List[Dict[str, Any]] = []
@@ -58,6 +61,8 @@ class MultiFrameDataset(Dataset):
         self.val_split_file = val_split_file
         self.seed = seed
         self.augmentation_level = augmentation_level
+        self.is_test = is_test
+        self.full_train = full_train
         
         if mode == 'train':
             # Training: apply augmentation on the fly
@@ -67,7 +72,7 @@ class MultiFrameDataset(Dataset):
                 self.transform = get_train_transforms(img_height, img_width)
             self.degrade = get_degradation_transforms()
         else:
-            # Validation: only resize and normalize
+            # Validation or test: only resize and normalize
             self.transform = get_val_transforms(img_height, img_width)
             self.degrade = None
 
@@ -80,13 +85,19 @@ class MultiFrameDataset(Dataset):
             print("❌ ERROR: No data found.")
             return
 
-        train_tracks, val_tracks = self._load_or_create_split(all_tracks, split_ratio)
-        
-        selected_tracks = train_tracks if mode == 'train' else val_tracks
-        print(f"[{mode.upper()}] Loaded {len(selected_tracks)} tracks.")
-        
-        self._index_samples(selected_tracks)
-        print(f"-> Total: {len(self.samples)} samples.")
+        # Handle test mode differently
+        if is_test:
+            print(f"[TEST] Loaded {len(all_tracks)} tracks.")
+            self._index_test_samples(all_tracks)
+            print(f"-> Total: {len(self.samples)} test samples.")
+        else:
+            train_tracks, val_tracks = self._load_or_create_split(all_tracks, split_ratio)
+            
+            selected_tracks = train_tracks if mode == 'train' else val_tracks
+            print(f"[{mode.upper()}] Loaded {len(selected_tracks)} tracks.")
+            
+            self._index_samples(selected_tracks)
+            print(f"-> Total: {len(self.samples)} samples.")
 
     def _load_or_create_split(
         self,
@@ -94,6 +105,11 @@ class MultiFrameDataset(Dataset):
         split_ratio: float
     ) -> Tuple[List[str], List[str]]:
         """Load existing split or create new one with Scenario-B priority."""
+        # If full_train mode, return all tracks as training
+        if self.full_train:
+            print("📌 FULL TRAIN MODE: Using all tracks for training (no validation split).")
+            return all_tracks, []
+        
         train_tracks, val_tracks = [], []
         
         # 1. Load split file if exists
@@ -191,6 +207,25 @@ class MultiFrameDataset(Dataset):
             except Exception:
                 pass
 
+    def _index_test_samples(self, tracks: List[str]) -> None:
+        """Index test samples without labels."""
+        for track_path in tqdm(tracks, desc="Indexing test"):
+            track_id = os.path.basename(track_path)
+            
+            # Load all LR images (sorted by frame number)
+            lr_files = sorted(
+                glob.glob(os.path.join(track_path, "lr-*.png")) +
+                glob.glob(os.path.join(track_path, "lr-*.jpg"))
+            )
+            
+            if lr_files:
+                self.samples.append({
+                    'paths': lr_files,
+                    'label': '',  # No label for test data
+                    'is_synthetic': False,
+                    'track_id': track_id
+                })
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -199,6 +234,7 @@ class MultiFrameDataset(Dataset):
         
         For training: applies degradation (if synthetic) then augmentation.
         For validation: applies degradation (if synthetic) then clean transform.
+        For test: only applies clean transform, returns dummy targets.
         """
         item = self.samples[idx]
         img_paths = item['paths']
@@ -215,16 +251,23 @@ class MultiFrameDataset(Dataset):
             if is_synthetic and self.degrade:
                 image = self.degrade(image=image)['image']
             
-            # Apply transform (augmented for training, clean for validation)
+            # Apply transform (augmented for training, clean for validation/test)
             image = self.transform(image=image)['image']
             images_list.append(image)
 
         images_tensor = torch.stack(images_list, dim=0)
-        target = [self.char2idx[c] for c in label if c in self.char2idx]
-        if len(target) == 0:
-            target = [0]
+        
+        # Handle test mode (no labels)
+        if self.is_test:
+            target = [0]  # Dummy target
+            target_len = 1
+        else:
+            target = [self.char2idx[c] for c in label if c in self.char2idx]
+            if len(target) == 0:
+                target = [0]
+            target_len = len(target)
             
-        return images_tensor, torch.tensor(target, dtype=torch.long), len(target), label, track_id
+        return images_tensor, torch.tensor(target, dtype=torch.long), target_len, label, track_id
 
     @staticmethod
     def collate_fn(batch: List[Tuple]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Tuple[str, ...], Tuple[str, ...]]:

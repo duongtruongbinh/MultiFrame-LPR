@@ -50,7 +50,6 @@ def _parse_best_accuracy(log_path: str) -> Optional[float]:
         with open(log_path, "r") as f:
             for line in f:
                 line = line.strip()
-                # Check for patterns: "Best Val Acc: X.XX%" or "Best accuracy: X.XX%"
                 for pattern in ["Best Val Acc:", "Best accuracy:", "Best Val Acc:"]:
                     if pattern in line:
                         try:
@@ -58,7 +57,7 @@ def _parse_best_accuracy(log_path: str) -> Optional[float]:
                             return float(token)
                         except (ValueError, IndexError):
                             continue
-                # Also check for final summary line
+
                 if "Training complete! Best Val Acc:" in line:
                     try:
                         token = line.split("Best Val Acc:")[1].strip().split("%")[0]

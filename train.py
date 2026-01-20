@@ -86,6 +86,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable Spatial Transformer Network (STN) alignment",
     )
+    parser.add_argument(
+        "--submission-mode",
+        action="store_true",
+        help="Train on full dataset and generate submission file for test data",
+    )
     return parser.parse_args()
 
 
@@ -138,42 +143,96 @@ def main():
     print(f"   BATCH_SIZE: {config.BATCH_SIZE}")
     print(f"   LEARNING_RATE: {config.LEARNING_RATE}")
     print(f"   DEVICE: {config.DEVICE}")
+    print(f"   SUBMISSION_MODE: {args.submission_mode}")
     
     # Validate data path
     if not os.path.exists(config.DATA_ROOT):
         print(f"❌ ERROR: Data root not found: {config.DATA_ROOT}")
         sys.exit(1)
 
-    # Create datasets
-    train_ds = MultiFrameDataset(
-        root_dir=config.DATA_ROOT,
-        mode='train',
-        split_ratio=config.SPLIT_RATIO,
-        img_height=config.IMG_HEIGHT,
-        img_width=config.IMG_WIDTH,
-        char2idx=config.CHAR2IDX,
-        val_split_file=config.VAL_SPLIT_FILE,
-        seed=config.SEED,
-        augmentation_level=config.AUGMENTATION_LEVEL,
-    )
+    # Common dataset parameters
+    common_ds_params = {
+        'split_ratio': config.SPLIT_RATIO,
+        'img_height': config.IMG_HEIGHT,
+        'img_width': config.IMG_WIDTH,
+        'char2idx': config.CHAR2IDX,
+        'val_split_file': config.VAL_SPLIT_FILE,
+        'seed': config.SEED,
+        'augmentation_level': config.AUGMENTATION_LEVEL,
+    }
     
-    val_ds = MultiFrameDataset(
-        root_dir=config.DATA_ROOT,
-        mode='val',
-        split_ratio=config.SPLIT_RATIO,
-        img_height=config.IMG_HEIGHT,
-        img_width=config.IMG_WIDTH,
-        char2idx=config.CHAR2IDX,
-        val_split_file=config.VAL_SPLIT_FILE,
-        seed=config.SEED,
-        augmentation_level=config.AUGMENTATION_LEVEL,
-    )
+    # Create datasets based on mode
+    if args.submission_mode:
+        print("\n📌 SUBMISSION MODE ENABLED")
+        print("   - Training on FULL dataset (no validation split)")
+        print("   - Will generate predictions for test data after training\n")
+        
+        # Create training dataset with full_train=True
+        train_ds = MultiFrameDataset(
+            root_dir=config.DATA_ROOT,
+            mode='train',
+            full_train=True,
+            **common_ds_params
+        )
+        
+        # Create test dataset if test data exists
+        test_loader = None
+        if os.path.exists(config.TEST_DATA_ROOT):
+            test_ds = MultiFrameDataset(
+                root_dir=config.TEST_DATA_ROOT,
+                mode='val',
+                img_height=config.IMG_HEIGHT,
+                img_width=config.IMG_WIDTH,
+                char2idx=config.CHAR2IDX,
+                seed=config.SEED,
+                is_test=True,
+            )
+            test_loader = DataLoader(
+                test_ds,
+                batch_size=config.BATCH_SIZE,
+                shuffle=False,
+                collate_fn=MultiFrameDataset.collate_fn,
+                num_workers=config.NUM_WORKERS,
+                pin_memory=True
+            )
+        else:
+            print(f"⚠️ WARNING: Test data not found at {config.TEST_DATA_ROOT}")
+        
+        val_loader = None
+    else:
+        # Normal training/validation split mode
+        train_ds = MultiFrameDataset(
+            root_dir=config.DATA_ROOT,
+            mode='train',
+            **common_ds_params
+        )
+        
+        val_ds = MultiFrameDataset(
+            root_dir=config.DATA_ROOT,
+            mode='val',
+            **common_ds_params
+        )
+        
+        val_loader = None
+        if len(val_ds) > 0:
+            val_loader = DataLoader(
+                val_ds,
+                batch_size=config.BATCH_SIZE,
+                shuffle=False,
+                collate_fn=MultiFrameDataset.collate_fn,
+                num_workers=config.NUM_WORKERS,
+                pin_memory=True
+            )
+        else:
+            print("⚠️ WARNING: Validation dataset is empty.")
+        
+        test_loader = None
     
     if len(train_ds) == 0:
         print("❌ Training dataset is empty!")
         sys.exit(1)
 
-    # Create data loaders
+    # Create training data loader
     train_loader = DataLoader(
         train_ds,
         batch_size=config.BATCH_SIZE,
@@ -182,19 +241,6 @@ def main():
         num_workers=config.NUM_WORKERS,
         pin_memory=True
     )
-    
-    val_loader = None
-    if len(val_ds) > 0:
-        val_loader = DataLoader(
-            val_ds,
-            batch_size=config.BATCH_SIZE,
-            shuffle=False,
-            collate_fn=MultiFrameDataset.collate_fn,
-            num_workers=config.NUM_WORKERS,
-            pin_memory=True
-        )
-    else:
-        print("⚠️ WARNING: Validation dataset is empty.")
 
     # Initialize model based on config
     if config.MODEL_TYPE == "restran":
@@ -229,6 +275,24 @@ def main():
     )
     
     trainer.fit()
+    
+    # Run test inference in submission mode
+    if args.submission_mode and test_loader is not None:
+        print("\n" + "="*60)
+        print("📝 GENERATING SUBMISSION FILE")
+        print("="*60)
+        
+        # Load best checkpoint if it exists
+        exp_name = config.EXPERIMENT_NAME
+        best_model_path = os.path.join(config.OUTPUT_DIR, f"{exp_name}_best.pth")
+        if os.path.exists(best_model_path):
+            print(f"📦 Loading best checkpoint: {best_model_path}")
+            model.load_state_dict(torch.load(best_model_path, map_location=config.DEVICE))
+        else:
+            print("⚠️ No best checkpoint found, using final model weights")
+        
+        # Run inference on test data
+        trainer.predict_test(test_loader, output_filename=f"submission_{exp_name}_final.txt")
 
 
 if __name__ == "__main__":
